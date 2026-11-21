@@ -1,6 +1,6 @@
 {
   "name": "re4-online-server",
-  "version": "0.1.0",
+  "version": "2.0.0",
   "private": true,
   "main": "server.js",
   "scripts": { "start": "node server.js" },
