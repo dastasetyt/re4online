@@ -29,7 +29,7 @@ function roomState(code) {
   for (const p of r.players) {
     // old clients find themselves by array index: give them the index; new ones get their slot
     const you = p.proto >= 2 ? p.slot : players.findIndex((q) => q.slot === p.slot);
-    send(p, { t: 'room', code, max: r.max, players, you });
+    send(p, { t: 'room', code, max: r.max, players, you, locked: !!r.locked });
   }
   if (all && !r.started) { r.started = true; for (const p of r.players) send(p, { t: 'go' }); }
   if (!all) r.started = false;
@@ -65,15 +65,24 @@ wss.on('connection', (ws) => {
     if (m.t === 'name') { ws.name = String(m.name || 'Leon').slice(0, 16); if (m.proto) ws.proto = Number(m.proto) || 1; }
     else if (m.t === 'create') {
       leave(ws); const c = code(); const max = Math.max(2, Math.min(10, Number(m.max) || 2));
-      rooms.set(c, { max, players: [ws], ready: new Map() }); ws.room = c; ws.slot = 0; roomState(c);
+      rooms.set(c, { max, players: [ws], ready: new Map(), locked: false, banned: new Set() }); ws.room = c; ws.slot = 0; roomState(c);
     } else if (m.t === 'join') {
       const c = String(m.code || '').toUpperCase().trim(); const r = rooms.get(c);
       if (!r) return send(ws, { t: 'error', msg: 'Sala não existe' });
       if (ws.room === c) return roomState(c);
+      if (r.locked) return send(ws, { t: 'error', msg: 'Sala trancada pelo host' });
+      if (r.banned && r.banned.has(ws.name)) return send(ws, { t: 'error', msg: 'Você foi expulso desta sala' });
       if (count(r) >= r.max) return send(ws, { t: 'error', msg: `Sala cheia (${r.max} jogadores)` });
       if (r.max > 2 && ws.proto < 2) return send(ws, { t: 'error', msg: 'Atualize o RE4 Online: esta sala é para mais de 2 jogadores' });
       leave(ws); ws.slot = freeSlot(r); r.players.push(ws); ws.room = c; roomState(c);
     } else if (m.t === 'ready') { const r = ws.room && rooms.get(ws.room); if (r) { r.ready.set(ws, !!m.v); roomState(ws.room); } }
+    else if (m.t === 'lock') { const r = ws.room && rooms.get(ws.room); if (r && ws.slot === 0) { r.locked = !!m.v; for (const p of r.players) send(p, { t: 'info', msg: r.locked ? 'Sala trancada: ninguém mais entra' : 'Sala destrancada' }); roomState(ws.room); } }
+    else if (m.t === 'kick') {
+      const r = ws.room && rooms.get(ws.room); if (!r || ws.slot !== 0) return;
+      const v = r.players.find((p) => p.slot === Number(m.slot) && p !== ws); if (!v) return;
+      r.banned.add(v.name); send(v, { t: 'kicked', msg: 'O host expulsou você da sala' }); const room = ws.room; leave(v); send(v, { t: 'left' });
+      for (const p of r.players) send(p, { t: 'info', msg: `${v.name} foi expulso pelo host` }); roomState(room);
+    }
     else if (m.t === 'leave') { leave(ws); send(ws, { t: 'left' }); }
     else if (m.t === 'ping') send(ws, { t: 'pong', id: m.id });
   });
